@@ -16,10 +16,12 @@ public class SagaOrchestrator {
 
     private final SagaRepository sagas;
     private final RabbitTemplate rabbit;
+    private final SagaWebSocketHandler ws;
 
-    public SagaOrchestrator(SagaRepository sagas, RabbitTemplate rabbit) {
+    public SagaOrchestrator(SagaRepository sagas, RabbitTemplate rabbit, SagaWebSocketHandler ws) {
         this.sagas = sagas;
         this.rabbit = rabbit;
+        this.ws = ws;
     }
 
     @Transactional
@@ -27,6 +29,7 @@ public class SagaOrchestrator {
         String sagaId = UUID.randomUUID().toString();
         SagaInstance saga = new SagaInstance(sagaId, from, to, amount, failStep);
         sagas.save(saga);
+        ws.broadcast(saga);
 
         rabbit.convertAndSend(Messaging.EXCHANGE, Messaging.RK_DEBIT,
                 new DebitCommand(sagaId, from, amount, failStep));
@@ -45,9 +48,10 @@ public class SagaOrchestrator {
             case "LEDGER" -> handleLedgerResult(saga, result);
             case "REFUND" -> handleRefundResult(saga);
             case "REVERSE_CREDIT" -> handleReverseResult(saga);
-            default -> { /* unknown */ }
+            default -> { }
         }
         sagas.save(saga);
+        ws.broadcast(saga);
     }
 
     private void handleDebitResult(SagaInstance saga, StepResult result) {
