@@ -1,0 +1,35 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: unwind-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: unwind-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: unwind
+      POSTGRES_PASSWORD: unwind
+      POSTGRES_DB: unwind
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U unwind"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
