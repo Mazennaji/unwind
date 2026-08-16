@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #0a0c12;
+  --color-panel: #11141e;
+  --color-panel2: #151926;
+  --color-edge: #222839;
+  --color-mist: #7e879d;
+  --color-violet: #8b7cf0;
+  --color-teal: #3fd6bf;
+  --color-amber: #eaa456;
+  --color-rose: #e0637a;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background:
+          radial-gradient(1000px 600px at 85% -15%, rgba(139,124,240,0.12), transparent 55%),
+          radial-gradient(800px 500px at 0% 110%, rgba(63,214,191,0.06), transparent 55%),
+          var(--color-ink);
+  color: #eef1f7;
+  font-family: Inter, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
+}
+
+.mono { font-family: "JetBrains Mono", monospace; font-feature-settings: "tnum"; }
+
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes nodeBloom {
+  0% { transform: scale(0.4); opacity: 0; }
+  60% { transform: scale(1.15); }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes ringPulse {
+  0% { box-shadow: 0 0 0 0 var(--pulse); }
+  70% { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes glowBreathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
