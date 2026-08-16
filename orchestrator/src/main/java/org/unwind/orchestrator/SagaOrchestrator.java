@@ -28,15 +28,8 @@ public class SagaOrchestrator {
         SagaInstance saga = new SagaInstance(sagaId, from, to, amount, failStep);
         sagas.save(saga);
 
-        try {
-            rabbit.convertAndSend(Messaging.EXCHANGE, Messaging.RK_DEBIT,
-                    new DebitCommand(sagaId, from, amount, failStep));
-            System.out.println(">>> published DebitCommand for saga " + sagaId
-                    + " to " + Messaging.EXCHANGE + "/" + Messaging.RK_DEBIT);
-        } catch (Exception e) {
-            System.out.println(">>> PUBLISH FAILED: " + e.getMessage());
-            e.printStackTrace();
-        }
+        rabbit.convertAndSend(Messaging.EXCHANGE, Messaging.RK_DEBIT,
+                new DebitCommand(sagaId, from, amount, failStep));
 
         return sagaId;
     }
@@ -50,7 +43,9 @@ public class SagaOrchestrator {
             case "DEBIT" -> handleDebitResult(saga, result);
             case "CREDIT" -> handleCreditResult(saga, result);
             case "LEDGER" -> handleLedgerResult(saga, result);
-            default -> { /* ignore compensation acks in happy path */ }
+            case "REFUND" -> handleRefundResult(saga);
+            case "REVERSE_CREDIT" -> handleReverseResult(saga);
+            default -> { /* unknown */ }
         }
         sagas.save(saga);
     }
@@ -69,8 +64,10 @@ public class SagaOrchestrator {
 
     private void handleCreditResult(SagaInstance saga, StepResult result) {
         if (!result.success()) {
-            saga.setState(SagaState.FAILED);
-            saga.setDetail("credit failed: " + result.detail());
+            saga.setState(SagaState.COMPENSATING);
+            saga.setDetail("credit failed, refunding debit: " + result.detail());
+            rabbit.convertAndSend(Messaging.EXCHANGE, Messaging.RK_REFUND,
+                    new RefundCommand(saga.getId(), saga.getFromAccount(), saga.getAmount()));
             return;
         }
         saga.setState(SagaState.CREDITED);
@@ -81,11 +78,24 @@ public class SagaOrchestrator {
 
     private void handleLedgerResult(SagaInstance saga, StepResult result) {
         if (!result.success()) {
-            saga.setState(SagaState.FAILED);
-            saga.setDetail("ledger failed: " + result.detail());
+            saga.setState(SagaState.COMPENSATING);
+            saga.setDetail("ledger failed, unwinding: " + result.detail());
+            rabbit.convertAndSend(Messaging.EXCHANGE, Messaging.RK_REVERSE_CREDIT,
+                    new ReverseCreditCommand(saga.getId(), saga.getToAccount(), saga.getAmount()));
+            rabbit.convertAndSend(Messaging.EXCHANGE, Messaging.RK_REFUND,
+                    new RefundCommand(saga.getId(), saga.getFromAccount(), saga.getAmount()));
             return;
         }
         saga.setState(SagaState.COMPLETED);
         saga.setDetail("transfer complete");
+    }
+
+    private void handleRefundResult(SagaInstance saga) {
+        saga.setState(SagaState.FAILED);
+        saga.setDetail(saga.getDetail() + " | refund done");
+    }
+
+    private void handleReverseResult(SagaInstance saga) {
+        saga.setDetail(saga.getDetail() + " | credit reversed");
     }
 }
