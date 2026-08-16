@@ -1,77 +1,80 @@
 <p align="center">
-  <img src="docs/logo.png" alt="unwind logo" width="180" />
+  <img src="docs/logo.png" alt="unwind" width="160" />
 </p>
 
 <h1 align="center">unwind</h1>
 
 <p align="center">
-  Orchestration-based saga for distributed transactions — coordinating multi-step workflows across services, and unwinding them when a step fails.
+  <strong>A distributed transaction that knows how to reverse itself.</strong>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white" alt="Java" />
-  <img src="https://img.shields.io/badge/Spring_Boot-3.3-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot" />
+  An orchestration-based saga in Spring Boot and RabbitMQ — coordinating a multi-step money transfer across independent services, and automatically unwinding the completed steps when any one of them fails.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white" alt="Java 21" />
+  <img src="https://img.shields.io/badge/Spring_Boot-3.3-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 3.3" />
   <img src="https://img.shields.io/badge/RabbitMQ-3.13-FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ" />
-  <img src="https://img.shields.io/badge/React-Vite-61DAFB?logo=react&logoColor=white" alt="React" />
-  <img src="https://img.shields.io/badge/License-MIT-black" alt="License" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white" alt="React" />
+  <img src="https://img.shields.io/badge/Tailwind-v4-38BDF8?logo=tailwindcss&logoColor=white" alt="Tailwind v4" />
+  <img src="https://img.shields.io/badge/License-MIT-black" alt="MIT" />
+</p>
+
+<p align="center">
+  <a href="#the-problem">Problem</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#run-it">Run it</a> ·
+  <a href="#design-decisions">Decisions</a>
 </p>
 
 ---
 
-A money transfer is not one action — it is several, spread across services that each own their own data: debit the sender, credit the recipient, record the ledger entry. There is no shared database transaction to make that atomic. So what happens when the credit succeeds but the ledger write fails? **unwind** answers that question with the saga pattern: a central orchestrator drives each step forward, and when one fails, it automatically reverses the completed steps in order — refunding, reversing, restoring — until the system is consistent again.
+## The problem
 
-## Why this exists
+Moving money from one account to another sounds like a single operation. Across a microservice system, it isn't. It is at least three: debit the sender, credit the recipient, write the ledger entry — each owned by a different service, each with its own database. There is no transaction that spans all three. So the moment the credit succeeds but the ledger write fails, you are left with money debited from one account, credited to another, and no record of why — an inconsistency a naive design will simply leave behind.
 
-Distributed transactions are one of the problems developers most often get wrong. The temptation is to pretend a multi-service operation is atomic; the reality is that any step can fail while earlier steps have already committed. `unwind` treats that reality as the whole point — the failure paths are not an afterthought, they are the feature. You can force any step to fail and watch the compensation unwind live.
+**unwind** is a working answer to that failure. It implements the saga pattern with a central orchestrator that walks the transfer forward one step at a time and, the instant a step fails, walks it *backward* — issuing the inverse of every step that already committed, in reverse order, until the system is whole again. The failure paths are not an edge case bolted on at the end; they are the entire point of the project.
 
-## What it does
+A live React monitor makes the abstraction concrete: each transfer is a thread that draws forward as it settles, and visibly retracts when it unwinds.
 
-The scenario is a transfer of funds between two accounts:
+## How it works
 
-```
-Transfer $100 from A to B:
+A transfer of \$100 from **A** to **B** runs as an ordered saga. Each forward step has a compensating inverse:
 
-  1. DEBIT A   ──►   2. CREDIT B   ──►   3. RECORD LEDGER   ──►   COMPLETED
-                                                │ fails?
-       REFUND A  ◄──  REVERSE CREDIT B  ◄───────┘
-       (compensations run in reverse order)
-```
+| # | Forward step | Service | Compensating step |
+| :-: | --- | --- | --- |
+| 1 | Debit A | account-service | Refund A |
+| 2 | Credit B | account-service | Reverse credit B |
+| 3 | Record ledger | ledger-service | — (final step, nothing to undo) |
 
-If crediting B fails, the orchestrator refunds A. If the ledger write fails, it reverses B's credit *and* refunds A — always unwinding in the reverse of the order things happened. The orchestrator persists its state at every step, so a crash mid-saga resumes rather than corrupts.
+The orchestrator sends step 1, waits for the reply, sends step 2, and so on. If step 2 fails, it compensates step 1 (refund A). If step 3 fails, it compensates steps 2 and 1 in reverse (reverse the credit to B, then refund A). Because compensation always runs in the reverse of the order things happened, the system lands back in a consistent state regardless of where the failure struck.
 
-## Patterns demonstrated
+Every saga is a persisted state machine:
 
-- **Orchestration-based saga** — a central coordinator owns the workflow state and decides each next step, rather than scattering the logic across services.
-- **Compensating transactions** — every forward action (debit, credit) has an inverse (refund, reverse) that the orchestrator invokes on failure, in reverse order.
-- **Durable saga state** — the orchestrator persists a state machine to Postgres, so an interrupted saga can recover instead of leaving money in limbo.
-- **Command / reply over messaging** — the orchestrator sends commands to services over RabbitMQ and reacts to their reply events, decoupling it from any service being online at the moment.
-- **Idempotency** — services safely ignore duplicate commands, since at-least-once delivery means a command may arrive more than once.
-- **Deliberate failure injection** — any step can be told to fail on demand, making the compensation path observable rather than theoretical.
-- **Live visualization** — a React timeline streams each state change over WebSocket, so a transfer is watched as it flows and unwinds.
+| State | Meaning |
+| --- | --- |
+| `STARTED` | Saga created, debit dispatched |
+| `DEBITED` | Sender debited, crediting recipient |
+| `CREDITED` | Recipient credited, writing ledger |
+| `COMPLETED` | All steps succeeded |
+| `COMPENSATING` | A step failed; inverse steps in progress |
+| `FAILED` | Fully unwound; system consistent |
+
+Because the state is written to PostgreSQL at every transition, the saga's progress is durable and auditable — you can always ask exactly where a transfer is and what it has done.
 
 ## Architecture
 
+The orchestrator never calls a service directly. It publishes a **command** to RabbitMQ; the target service acts and publishes a **reply event**; the orchestrator advances its state machine on that reply. Services share no database tables — consistency across them is maintained entirely by the saga.
+
 | Module | Responsibility |
 | --- | --- |
-| **orchestrator** | The saga coordinator: persisted state machine, command dispatch, compensation logic, REST API, WebSocket push. |
-| **account-service** | Holds balances. Performs debit / credit and their compensations (refund / reverse). |
+| **orchestrator** | The coordinator. Owns the persisted state machine, dispatches commands, runs compensation logic, exposes the REST API, and pushes live updates over WebSocket. |
+| **account-service** | Owns account balances. Executes debit and credit, plus their compensations (refund, reverse). |
 | **ledger-service** | Records completed transfers. |
-| **common** | Shared command and event contracts — the saga's vocabulary, used by every module. |
-| **frontend** | React timeline: start a transfer, toggle failures per step, watch the saga advance and unwind in real time. |
-
-The orchestrator never calls a service directly. It publishes a command to RabbitMQ, the target service acts and replies with an event, and the orchestrator advances its state machine on that reply. Each service owns its own data; consistency across them is maintained entirely by the saga.
-
-## Saga states
-
-The orchestrator persists a single saga instance through a linear lifecycle, with a compensation branch:
-
-```
-STARTED ─► DEBITED ─► CREDITED ─► COMPLETED
-   │           │           │
-   └───────────┴───────────┴──► COMPENSATING ─► FAILED
-```
-
-Advancing or compensating is a decision based on the persisted state plus the latest reply — simple, auditable, and fully owned by the orchestrator.
+| **common** | The shared vocabulary — command and event contracts every module speaks. |
+| **frontend** | React monitor. Starts transfers, injects failures per step, and renders each saga as a thread that advances and unwinds in real time. |
 
 ## Tech stack
 
@@ -79,74 +82,65 @@ Advancing or compensating is a decision based on the persisted state plus the la
 | --- | --- |
 | Language | Java 21 |
 | Framework | Spring Boot 3.3 |
-| Messaging | RabbitMQ (`spring-amqp`) |
-| Persistence | PostgreSQL (Spring Data JPA) |
-| Realtime | WebSocket (`spring-boot-starter-websocket`) |
+| Messaging | RabbitMQ via `spring-amqp` (command / reply) |
+| Persistence | PostgreSQL via Spring Data JPA, one schema per service |
+| Realtime | Raw WebSocket (`spring-boot-starter-websocket`) |
 | Frontend | React + Vite + TypeScript + Tailwind CSS v4 |
 | Build | Multi-module Maven |
-| Orchestration | Docker Compose |
+| Infrastructure | Docker Compose |
 
-## Getting started
+## Run it
 
-**Prerequisites:** Java 21, Maven, Node 20+, and Docker.
+**Prerequisites:** Java 21, Node 20+, and Docker.
 
-**1. Start the infrastructure** (RabbitMQ, PostgreSQL):
+Start the infrastructure, build the backend, run each service, and launch the monitor:
 
 ```bash
+# 1. RabbitMQ + PostgreSQL
 docker compose up -d
+
+# 2. Build all modules
+./mvnw clean install
+
+# 3. Run the services (each in its own terminal)
+./mvnw -pl account-service spring-boot:run
+./mvnw -pl ledger-service spring-boot:run
+./mvnw -pl orchestrator spring-boot:run
+
+# 4. Run the monitor
+cd frontend && npm install && npm run dev
 ```
 
-**2. Build and run the backend modules** — each in its own terminal:
+Open the monitor at **http://localhost:5173**. Send a transfer and watch the thread settle. Then set **Inject failure** to *at credit* or *at ledger* and watch the same transfer unwind — the completed steps retracting in reverse as the orchestrator compensates.
 
-```bash
-mvn -pl account-service spring-boot:run
-mvn -pl ledger-service spring-boot:run
-mvn -pl orchestrator spring-boot:run
-```
+| Surface | URL |
+| --- | --- |
+| Live monitor | http://localhost:5173 |
+| Orchestrator API + WebSocket | http://localhost:8080 |
+| RabbitMQ management | http://localhost:15672 |
 
-**3. Run the frontend:**
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-**4. Open the dashboard** at **http://localhost:5173**.
-
-Start a transfer, optionally toggle a step to fail, and watch the saga timeline advance — or unwind.
-
-Useful endpoints:
-
-- Dashboard — http://localhost:5173
-- Orchestrator API + WebSocket — http://localhost:8080
-- RabbitMQ management UI — http://localhost:15672
+Accounts `acct-A` (1000.00) and `acct-B` (500.00) are seeded automatically on startup.
 
 ## Design decisions
 
-- **Orchestration over choreography.** Choreography (services reacting to each other's events with no coordinator) is elegant for simple flows, but scatters the transaction logic and hides the overall state. Orchestration keeps the saga's lifecycle in one place, which is what makes the pattern legible. Choreography would be a natural second implementation.
-- **Hand-rolled state machine over a library.** A money-transfer saga is a short linear sequence with a reverse compensation path — a persisted status enum and a decision function express it clearly, and keep the logic visible rather than hidden behind a framework.
-- **Async messaging over synchronous REST.** Commands sit in queues and survive restarts; a briefly-offline service does not fail the transfer. This mirrors how real financial systems coordinate.
+**Orchestration over choreography.** In choreography, services react to one another's events with no central coordinator — elegant for simple flows, but the transaction logic scatters across services and no single place knows the overall state. Orchestration keeps the saga's lifecycle in one legible place, which is what makes the pattern teachable and debuggable. Choreography is a natural second implementation.
+
+**A hand-rolled state machine, not a library.** A money-transfer saga is a short linear sequence with a reverse compensation path. A persisted status enum plus a decision function expresses it exactly, and keeps the logic visible in the codebase rather than hidden behind a framework's abstractions.
+
+**Asynchronous messaging, not synchronous REST between services.** Commands travel over RabbitMQ, so a briefly-offline participant does not fail the transfer — the command waits in its queue. This mirrors how real financial systems coordinate, and makes the saga naturally resilient to restarts.
 
 ## Known simplifications
 
-Deliberate scope choices, each with a well-understood production fix.
+Deliberate scope choices, each with a well-understood production path.
 
-- **Balances are illustrative.** Accounts and balances exist to demonstrate the saga, not to model real banking (no double-entry accounting, currencies, or precision handling beyond the basics).
-- **Single orchestrator instance.** Running multiple orchestrator instances would require distributed locking on saga instances; here a single instance owns each saga.
-- **Compensation is assumed to succeed.** A production system must handle the harder case where a compensating action itself fails, typically via retries and a manual-intervention queue.
+- **Balances are illustrative** — enough to demonstrate the saga, not a real banking ledger (no double-entry accounting, currencies, or interest).
+- **A single orchestrator instance** owns each saga. Running several would require distributed locking on saga rows.
+- **Compensations are assumed to succeed** — the demo does not model a failing compensation, which a production system handles with retries and a manual-intervention queue.
+- **At-least-once delivery** — a failed message is rejected and dropped rather than deduplicated against a persisted message ID, which a production consumer would add for full idempotency.
 
-## Roadmap
+## Project status
 
-- [ ] Step 0 — Multi-module Maven scaffold, infrastructure online
-- [ ] Step 1 — Shared command/event contracts
-- [ ] Step 2 — Account service (debit / credit + compensations)
-- [ ] Step 3 — Ledger service
-- [ ] Step 4 — Orchestrator state machine (happy path)
-- [ ] Step 5 — Compensation on failure
-- [ ] Step 6 — Idempotency + durable recovery
-- [ ] Step 7 — REST API + WebSocket push
-- [ ] Step 8 — React + Tailwind timeline UI
+Complete and working end to end: the happy path settles, single-step failures compensate, and multi-step failures unwind in reverse order — all visible live in the monitor.
 
 ## License
 
