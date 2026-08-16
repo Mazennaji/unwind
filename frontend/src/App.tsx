@@ -132,7 +132,7 @@ export default function App() {
                 </header>
 
                 <p className="text-[var(--color-mist)] text-[15px] leading-relaxed max-w-md mb-12">
-                    A saga steps a transfer forward — debit, credit, record. When a step
+                    A saga steps a transfer forward: debit, credit, record. When a step
                     fails, it retraces the thread and undoes every step that already
                     happened.
                 </p>
