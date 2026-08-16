@@ -3,7 +3,7 @@ server:
 
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/unwind
+    url: jdbc:postgresql://localhost:5434/unwind
     username: unwind
     password: unwind
   jpa:
