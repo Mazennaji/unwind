@@ -1,0 +1,19 @@
+server:
+  port: 8081
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/unwind
+    username: unwind
+    password: unwind
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        default_schema: accounts
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: admin
+    password: admin
